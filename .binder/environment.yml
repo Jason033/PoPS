@@ -8,7 +8,8 @@ dependencies:
   - pip
 
   - pip:
-      - -e .
+      # 從你的 GitHub repo 直接安裝 PoPS 套件
+      - git+https://github.com/Jason033/PoPS.git@master#egg=PoPS
       - absl-py==0.7.1
       - asn1crypto==0.24.0
       - astor==0.8.0
