@@ -9,7 +9,7 @@ dependencies:
 
   - pip:
       # ← 這行會直接從你 GitHub 上把 PoPS install 進來
-      - git+https://github.com/Jason033/PoPS.git@main
+      - git+https://github.com/Jason033/PoPS.git@master
 
       # 下面才是你原本那些第三方套件
       - absl-py==0.7.1
