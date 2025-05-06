@@ -1,5 +1,5 @@
 name: mybinder-env
- channels:
+ channels: 
    - conda-forge
    - defaults
  dependencies:
