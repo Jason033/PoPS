@@ -15,15 +15,14 @@ dependencies:
   - protobuf=3.9.1
   - grpcio=1.23.0
   - keras=2.2.4
-  - gym=0.10.9
-  - box2d-py
   - pip
 
   # 只用 pip 安裝 GitHub 套件與純 Python libraries
   - pip:
       # PoPS 核心程式
       - git+https://github.com/Jason033/PoPS.git@master
-
+      - gym=0.10.9
+      - Box2D==2.3.2
       # 以下為純 Python、或 conda-forge 上較難取得的套件
       - absl-py==0.7.1
       - astor==0.8.0
