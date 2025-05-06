@@ -1,5 +1,5 @@
 # 1. 指定 base image（含 Jupyter 與 conda/mamba）
-FROM jupyter/minimal-notebook:python-3.6
+FROM jupyter/minimal-notebook:latest
 
 # 2. 切換到 root 權限，才能安裝套件
 USER root
