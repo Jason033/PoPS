@@ -1,8 +1,8 @@
 name: mybinder-env
- channels: 
+channels: 
    - conda-forge
    - defaults
- dependencies:
+dependencies:
    # core Python and conda packages
    - python=3.6
    - pip
