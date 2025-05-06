@@ -1,6 +1,6 @@
-name: pops-binder
+#  放在 repo 根目錄下的 environment.yml
+
 channels:
-  - defaults
   - conda-forge
 
 dependencies:
@@ -8,8 +8,10 @@ dependencies:
   - pip
 
   - pip:
-      # 從你的 GitHub repo 直接安裝 PoPS 套件
-      - git+https://github.com/Jason033/PoPS.git@master#egg=PoPS
+      # ← 這行會直接從你 GitHub 上把 PoPS install 進來
+      - git+https://github.com/Jason033/PoPS.git@main
+
+      # 下面才是你原本那些第三方套件
       - absl-py==0.7.1
       - asn1crypto==0.24.0
       - astor==0.8.0
