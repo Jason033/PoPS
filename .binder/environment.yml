@@ -15,8 +15,8 @@ dependencies:
    - matplotlib=2.2.3
    - pandas
    - tensorflow=1.15.5
-   - tensorflow-estimator=1.14.0
-   - tensorboard=1.14.0
+   - tensorflow-estimator
+   - tensorboard
    - grpcio=1.23.0
    # install Box2D from conda-forge rather than pip (avoids need for SWIG)
    - box2d-py
