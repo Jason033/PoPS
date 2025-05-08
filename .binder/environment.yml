@@ -14,7 +14,7 @@ dependencies:
    - scipy=1.2.0
    - matplotlib=2.2.3
    - pandas
-   - tensorflow=1.15.5
+   
    - tensorflow-estimator
    - tensorboard
    - grpcio=1.23.0
@@ -26,6 +26,7 @@ dependencies:
  
    # remaining packages via pip
    - pip:
+     - tensorflow==1.15.5
      - absl-py==0.7.1
      - asn1crypto==0.24.0
      - astor==0.8.0
