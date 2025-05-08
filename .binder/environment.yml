@@ -14,7 +14,7 @@ dependencies:
    - scipy=1.2.0
    - matplotlib=2.2.3
    - pandas
-   
+   - opencv
    - tensorflow-estimator
    - tensorboard
    - grpcio=1.23.0
