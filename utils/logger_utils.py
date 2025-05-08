@@ -7,9 +7,9 @@ def get_logger(name: str):
     dirname = os.path.dirname(name)
     if not os.path.exists(dirname):
         try:
-           os.makedirs(dirname)
-       except Exception:
-           pass
+            os.makedirs(dirname)
+        except Exception:
+            pass
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)  # By default, logs all messages
     fh = logging.FileHandler("{0}.log".format(name))
