@@ -6,7 +6,9 @@ from abc import ABCMeta, abstractmethod
 
 import random
 import os
-
+# ----------  SAC  for  CartPole  (discrete action space)  ----------
+import tensorflow_probability as tfp
+tfd = tfp.distributions
 
 class BaseNetwork:
 
@@ -873,6 +875,156 @@ class StudentPong(DQNPong):
         return logits
     """
 
+class CartPoleSAC(BaseNetwork):
+    """
+    離散版 Soft Actor‑Critic
+      • actor  : π(a|s) – softmax logits
+      • critics: Q1, Q2  (action‑value)      (target_net 用於 bootstrap)
+      • α      : 熵權重，可自適應 (可改成固定常數)
+    """
+    def __init__(self, input_size,
+                 output_size,
+                 model_path,
+                 scope='CartPoleSAC',
+                 gamma=0.99,
+                 tau=0.005,              # soft‑update 係數
+                 alpha_init=0.2,         # 初始熵係數
+                 target_entropy=-1.0):   # 期望熵（離散動作建議 −|A|
+        super(CartPoleSAC, self).__init__(model_path=model_path)
+        self.input_size = input_size
+        self.output_size = output_size
+        self.gamma  = gamma
+        self.tau    = tau
+        self.target_entropy = target_entropy
+        with self.graph.as_default():
+            # ---- placeholders ----
+            self.state      = tf.placeholder(tf.float32, shape=self.input_size,              name='state')
+            self.action     = tf.placeholder(tf.int32,    shape=[None, 1],                   name='action')  # (batch,1)
+            self.reward     = tf.placeholder(tf.float32,  shape=[None, 1],                   name='reward')
+            self.next_state = tf.placeholder(tf.float32,  shape=self.input_size,             name='next_state')
+            self.done       = tf.placeholder(tf.float32,  shape=[None, 1],                   name='done')
+            self.lr         = tf.placeholder(tf.float32,  shape=(),                         name='lr')
+
+            # ---- nets (online) ----
+            with tf.variable_scope(scope):
+                self.logits   = self._build_actor(self.state,   name='actor')   # π
+                self.q1       = self._build_critic(self.state,  name='q1')      # Q1(s,a)
+                self.q2       = self._build_critic(self.state,  name='q2')      # Q2(s,a)
+
+            # ---- target critics ----
+            with tf.variable_scope(scope + '_target'):
+                self.q1_targ  = self._build_critic(self.next_state, name='q1_target')
+                self.q2_targ  = self._build_critic(self.next_state, name='q2_target')
+
+            # ---- α 參數（可註解掉改成常數） ----
+            log_alpha = tf.get_variable('log_alpha', dtype=tf.float32,
+                                        initializer=np.log(alpha_init), trainable=True)
+            self.alpha = tf.exp(log_alpha)
+
+            # ---- policy loss ----
+            pi_dist  = tfd.Categorical(logits=self.logits)     # 離散 policy
+            pi_a     = pi_dist.sample()                        # (batch,)
+            log_pi   = pi_dist.log_prob(pi_a)[:, None]         # (batch,1)
+
+            q1_pi    = tf.reduce_sum(self.q1 * tf.one_hot(pi_a, self.output_size[-1]), axis=1, keepdims=True)
+            q2_pi    = tf.reduce_sum(self.q2 * tf.one_hot(pi_a, self.output_size[-1]), axis=1, keepdims=True)
+            min_q_pi = tf.minimum(q1_pi, q2_pi)
+
+            self.pi_loss = tf.reduce_mean(self.alpha * log_pi - min_q_pi)
+
+            # ---- critic targets ----
+            next_logits = self._build_actor(self.next_state, name='actor', reuse=True)
+            next_dist   = tfd.Categorical(logits=next_logits)
+            next_log_pi = next_dist.log_prob(next_dist.sample())[:, None]
+            next_q      = tf.minimum(self.q1_targ, self.q2_targ)
+            next_v      = tf.reduce_sum(next_dist.probs_parameter() * (next_q - self.alpha * next_log_pi), axis=1,
+                                        keepdims=True)
+
+            target_q    = self.reward + self.gamma * (1 - self.done) * next_v
+
+            # ---- critic losses ----
+            act_onehot  = tf.one_hot(self.action[:, 0], self.output_size[-1])
+            q1_sa       = tf.reduce_sum(self.q1 * act_onehot, axis=1, keepdims=True)
+            q2_sa       = tf.reduce_sum(self.q2 * act_onehot, axis=1, keepdims=True)
+
+            self.q1_loss = tf.losses.mean_squared_error(labels=target_q, predictions=q1_sa)
+            self.q2_loss = tf.losses.mean_squared_error(labels=target_q, predictions=q2_sa)
+
+            # ---- α loss ----
+            self.alpha_loss = -tf.reduce_mean(log_alpha * (log_pi + self.target_entropy))
+
+            # ---- optimizers ----
+            pi_vars   = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/actor')
+            q1_vars   = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/q1')
+            q2_vars   = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/q2')
+
+            self.pi_train  = tf.train.AdamOptimizer(self.lr).minimize(self.pi_loss,   var_list=pi_vars)
+            self.q1_train  = tf.train.AdamOptimizer(self.lr).minimize(self.q1_loss,   var_list=q1_vars)
+            self.q2_train  = tf.train.AdamOptimizer(self.lr).minimize(self.q2_loss,   var_list=q2_vars)
+            self.alpha_opt = tf.train.AdamOptimizer(self.lr).minimize(self.alpha_loss, var_list=[log_alpha])
+
+            # ---- target network 變數與 soft‑update ----
+            targ_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope + '_target')
+            main_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope)  # 包含 actor 但我們只取 critics
+            self.target_init = [v_t.assign(v) for v_t, v in zip(targ_vars, main_vars)]
+            self.target_soft = [v_t.assign(self.tau * v + (1. - self.tau) * v_t)
+                                for v_t, v in zip(targ_vars, main_vars)]
+
+            # ---- 初始化 ----
+            self.saver = tf.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
+            self.init_variables(tf.global_variables())
+
+    # ------------------------------------------------------------------
+    def _build_actor(self, x, name, reuse=False):
+        with tf.variable_scope(name, reuse=reuse):
+            h1 = _build_fc_layer(self, x, scope='fc1',  shape=[self.input_size[-1], 256],
+                                 activation=tf.nn.relu, weight_init=tf.keras.initializers.glorot_uniform())
+            h2 = _build_fc_layer(self, h1, scope='fc2', shape=[256, 128],
+                                 activation=tf.nn.relu, weight_init=tf.keras.initializers.glorot_uniform())
+            logits = _build_fc_layer(self, h2, scope='logits', shape=[128, self.output_size[-1]],
+                                     weight_init=tf.keras.initializers.glorot_uniform())
+        return logits  # 未經 softmax
+
+    def _build_critic(self, x, name, reuse=False):
+        with tf.variable_scope(name, reuse=reuse):
+            h1 = _build_fc_layer(self, x, scope='fc1',  shape=[self.input_size[-1], 256],
+                                 activation=tf.nn.relu, weight_init=tf.keras.initializers.glorot_uniform())
+            h2 = _build_fc_layer(self, h1, scope='fc2', shape=[256, 256],
+                                 activation=tf.nn.relu, weight_init=tf.keras.initializers.glorot_uniform())
+            q  = _build_fc_layer(self, h2, scope='q',   shape=[256, self.output_size[-1]],
+                                 weight_init=tf.keras.initializers.glorot_uniform())
+        return q  # (batch, |A|)
+
+    # ------------------------------------------------------------------
+    # ---------- Public API (對應原 DQNAgent 同名函式) ----------
+    def sample_action(self, state, explore=True):
+        probs = self.sess.run(tfd.Categorical(logits=self.logits).probs_parameter(),
+                              feed_dict={self.state: state})
+        if explore:
+            return [np.random.choice(self.output_size[-1], p=probs.ravel())]
+        else:
+            return [np.argmax(probs)]
+
+    def learn(self, batch, lr=3e-4):
+        """
+        batch: dict{ 's','a','r','s_','d' }，皆為 (batch,…) numpy
+        """
+        feed = {self.state:       batch['s'],
+                self.action:      batch['a'],
+                self.reward:      batch['r'],
+                self.next_state:  batch['s_'],
+                self.done:        batch['d'],
+                self.lr:          lr}
+        # critic
+        self.sess.run([self.q1_train, self.q2_train], feed_dict=feed)
+        # actor + α
+        self.sess.run([self.pi_train, self.alpha_opt], feed_dict=feed)
+        # soft‑update
+        self.sess.run(self.target_soft)
+
+    # 初始化 target critics
+    def init_target(self):
+        self.sess.run(self.target_init)
 
 class CartPoleDQN(DQNPong):
     """
