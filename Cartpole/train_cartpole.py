@@ -1,70 +1,80 @@
 import gym
-from model import CartPoleDQN, CartPoleDQNTarget
-from configs import CartpoleConfig as dense_config
-from utils.Memory import ExperienceReplay
 import numpy as np
+from utils.Memory import ExperienceReplay
 from utils.logger_utils import get_logger
-from PONG.train_gym import train_on_batch
+from model import CartPoleSAC                 # ← 改用 SAC
+from configs import CartpoleConfig as cfg     # 同一份設定檔，可在其中新增 lr、tau 等 SAC 參數
 
+# ------------------------------------------------------------
+def sample_batch(exp_replay, batch_size):
+    """從 ExperienceReplay 抽樣並整理成 SAC 需要的字典格式"""
+    batch = exp_replay.sample(batch_size)
+    states      = np.array([item[0] for item in batch])
+    actions     = np.array([[item[1]] for item in batch], dtype=np.int32)
+    rewards     = np.array([[item[2]] for item in batch], dtype=np.float32)
+    next_states = np.array([item[3] for item in batch])
+    dones       = np.array([[float(item[4])] for item in batch], dtype=np.float32)
+    return {'s': states,
+            'a': actions,
+            'r': rewards,
+            's_': next_states,
+            'd': dones}
 
+# ------------------------------------------------------------
 def main():
-    agent = CartPoleDQN(input_size=dense_config.input_size,
-                        output_size=dense_config.output_size, model_path=dense_config.model_path_overtrained)
-    target_agent = CartPoleDQNTarget(input_size=dense_config.input_size, output_size=dense_config.output_size)
-    agent.print_num_of_params()
-    target_agent.print_num_of_params()
-    logger = get_logger("train_Cartpole_agent")
-    fit(logger, agent, target_agent, dense_config.n_epoch)
+    agent = CartPoleSAC(input_size=cfg.input_size,
+                        output_size=cfg.output_size,
+                        model_path=cfg.model_path_sac)
+    agent.init_target()                       # 初始化 target critics
+    logger = get_logger("train_Cartpole_SAC")
+    fit(logger, agent, cfg.n_epoch)
 
-
-def fit(logger, agent: CartPoleDQN, target_agent: CartPoleDQNTarget, n_epochs=1500, synch=True):
+# ------------------------------------------------------------
+def fit(logger, agent: CartPoleSAC, n_epochs=1500):
     logger.info("------Building env------")
     env = gym.make('CartPole-v0')
     last_mean_100_reward = [0] * 100
-    exp_replay = ExperienceReplay(size=dense_config.memory_size)
+    exp_replay = ExperienceReplay(size=cfg.memory_size)
     logger.info("------Commence training------")
-    degradation = 1 / dense_config.EXPLORE
-    agent.set_degradation(degradation)
+
     total_steps = 0
     i = 0  # for convergence purposes
     for e in range(n_epochs):
         state = env.reset()
-        print("agent epsilon : {}".format(agent.epsilon))
         done = False
         epoch_reward = 0
-        while not done:  # while not in terminal
+
+        while not done:
             total_steps += 1
-            q_values = agent.get_q(state=np.expand_dims(state, axis=0))
-            action = agent.select_action(qValues=q_values)
+            action = agent.sample_action(np.expand_dims(state, 0))[0]
             next_state, reward, done, _ = env.step(action)
             epoch_reward += reward
-            exp_replay.add_memory(state=state, action=action, reward=reward, next_state=next_state, is_done=done)
+            exp_replay.add_memory(state, action, reward, next_state, done)
             state = next_state
-            agent.lower_epsilon()
-            if total_steps < dense_config.OBSERVE:
+
+            if total_steps < cfg.OBSERVE or exp_replay.size < cfg.batch_size:
                 continue
-            train_on_batch(agent=agent, target_dqn=target_agent, exp_replay=exp_replay, e=e, config=dense_config)
-            if synch and total_steps % dense_config.UPDTATE_FREQ == 0:
-                agent.save_model()
-                target_agent.sync(agent_path=agent.model_path)
-                print("Update target DQN")
+
+            batch_dict = sample_batch(exp_replay, cfg.batch_size)
+            agent.learn(batch_dict, lr=cfg.lr)
+
+        # 記錄與評估
         last_mean_100_reward[e % 100] = epoch_reward
         if e < 100:
             print("Episode ", e, " / {} finished with reward {}".format(n_epochs, epoch_reward))
         else:
             mean_100_reward = sum(last_mean_100_reward) / 100
             print("Episode ", e,
-                  " / {} finished with reward of {} and the last 100 average reward is {} ".format(n_epochs,
-                                                                                                   epoch_reward,
-                                                                                                   mean_100_reward))
-            logger.info(
-                "Episode {} / {} finished with reward of {} and the last 100 average reward is {} ".format(e, n_epochs,
-                                                                                                           epoch_reward,
-                                                                                                           mean_100_reward))
-            if mean_100_reward > dense_config.OBJECTIVE_SCORE:
+                  " / {} finished with reward {} | last‑100 avg {}".format(n_epochs,
+                                                                           epoch_reward,
+                                                                           mean_100_reward))
+            logger.info("Episode {} / {} reward {} | last‑100 avg {}".format(e,
+                                                                             n_epochs,
+                                                                             epoch_reward,
+                                                                             mean_100_reward))
+            if mean_100_reward > cfg.OBJECTIVE_SCORE:
                 agent.save_model()
-                logger.info("Goal achieved!, at episode {} to {}, with average reward of {}".format(e - 100, e,
-                                                                                                    mean_100_reward))
+                logger.info("Goal achieved! ep {}‑{} avg reward {}".format(e - 100, e, mean_100_reward))
                 i += 1
                 if i % 50 == 0:
                     break
@@ -75,6 +85,6 @@ def fit(logger, agent: CartPoleDQN, target_agent: CartPoleDQNTarget, n_epochs=15
     except ImportError:
         pass
 
-
+# ------------------------------------------------------------
 if __name__ == '__main__':
     main()
