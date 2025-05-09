@@ -23,9 +23,10 @@ dependencies:
    # include common Jupyter extensions
    - ipywidgets=7.4.2
    - widgetsnbextension=3.4.2
- 
+   - cmake  
    # remaining packages via pip
    - pip:
+     - tensorflow_probability
      - tensorflow==1.15.5
      - absl-py==0.7.1
      - asn1crypto==0.24.0
