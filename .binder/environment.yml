@@ -26,7 +26,7 @@ dependencies:
    - cmake  
    # remaining packages via pip
    - pip:
-     - tensorflow_probability
+     - tensorflow_probability==0.7.0
      - tensorflow==1.15.5
      - absl-py==0.7.1
      - asn1crypto==0.24.0
