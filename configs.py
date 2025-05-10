@@ -200,27 +200,36 @@ class PrunePongAgentConfig:
             return StudentPongConfig.learning_rate_for_10_and_down(epoch)
 
 
+# config.py
 class CartpoleConfig:
+    # Environment dimensions
     input_size = (None, 4)
     output_size = (None, 2)
+
+    # Model save paths
     model_path = 'saved_models/Cart_pole/network_dense'
     model_path_overtrained = r'saved_models/Cart_pole/network_dense_over_trained'
-    ready_path = 'saved_models/Cart_pole/‏‏network_dense_ready'
-    ready_path_overtrained = 'saved_models/Cart_pole/‏‏network_dense_ready_over_trained'
+    ready_path = 'saved_models/Cart_pole/network_dense_ready'
+    ready_path_overtrained = 'saved_models/Cart_pole/network_dense_ready_over_trained'
+
+    # SAC-specific model path
+    model_path_sac = 'saved_models/Cart_pole/network_sac'
+
+    # Training schedules
     n_epoch = 15000
     batch_size = 128
     memory_size = 100000
-    EXPLORE = 100000  # 100k
-    OBSERVE = 25000  # 10k
-    UPDTATE_FREQ = 600
-    ALPHA_PER = 0.6
-    EPS_PER = 1e-6
-    BETA0_PER = 0.4
-    OBJECTIVE_SCORE = 195
-    steps_per_train = 1
+    OBSERVE = 25000      # Warm-up steps before learning
 
+    # Learning rate for SAC
+    lr = 3e-4
+
+    # Performance target
+    OBJECTIVE_SCORE = 195
+
+    # Optional: dynamic learning rate schedule (if needed)
     @staticmethod
-    def learning_rate_schedule(epoch : int):
+    def learning_rate_schedule(epoch: int):
         if epoch <= 2500:
             return 1e-3
         if 2500 < epoch <= 5000:
@@ -232,10 +241,6 @@ class CartpoleConfig:
         else:
             return 5e-5
 
-
-    @staticmethod
-    def beta_schedule(beta0, e: int, n_epoch: int):
-        return min(beta0 + ((1 - beta0) / n_epoch) * e, 1.0)
 
 
 class PruneCartpoleConfig:
