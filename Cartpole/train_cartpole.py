@@ -2,9 +2,15 @@ import gym
 import numpy as np
 from utils.Memory import ExperienceReplay
 from utils.logger_utils import get_logger
-from model import CartPoleSAC                 # ← 改用 SAC
+from model import CartPoleSAC 
+print("hello")                # ← 改用 SAC
 from configs import CartpoleConfig as cfg     # 同一份設定檔，可在其中新增 lr、tau 等 SAC 參數
 
+import tensorflow as tf
+sess = tf.Session()           # 看會不會另外 segfault
+a   = tf.constant([1.0,2.0])
+b   = sess.run(a)
+print(b)
 # ------------------------------------------------------------
 def sample_batch(exp_replay, batch_size):
     """從 ExperienceReplay 抽樣並整理成 SAC 需要的字典格式"""
