@@ -17,7 +17,7 @@ class BaseNetwork:
     @property
     def sess(self):
         if not hasattr(self, '_sess'):
-            config = tf.ConfigProto()
+            config = tf.compat.v1.ConfigProto()
             # to save GPU resources
             config.gpu_options.allow_growth = True
             self._sess = tf.Session(config=config, graph=self.graph)
@@ -28,7 +28,7 @@ class BaseNetwork:
             self.init_variables(tf.global_variables())
 
     def init_variables(self, var_list):
-        self.sess.run(tf.variables_initializer(var_list))
+        self.sess.run(tf.compat.v1.variables_initializer(var_list))
 
     def number_of_parameters(self, var_list):
         return sum(np.prod(v.get_shape().as_list()) for v in var_list)
@@ -70,7 +70,7 @@ class BaseNetwork:
           Variable Tensor
         """
         with tf.device('/cpu:0'):
-            var = tf.get_variable(name, shape, initializer=initializer)
+            var = tf.compat.v1.get_variable(name, shape, initializer=initializer)
         return var
 
     def _variable_with_weight_decay(self, name, shape, wd, initialization):
@@ -95,7 +95,7 @@ class BaseNetwork:
             initialization)
         if wd is not None:
             weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
-            tf.add_to_collection('losses', weight_decay)
+            tf.compat.v1.add_to_collection('losses', weight_decay)
         return var
 
 class DQNAgent(BaseNetwork):  # abstract class
@@ -130,7 +130,7 @@ class DQNAgent(BaseNetwork):  # abstract class
             self.weights_matrices = pruning.get_masked_weights()
             self.loss = self._build_loss()
             self.train_op = self._build_train_op()
-            self.saver = tf.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
             self.init_variables(tf.global_variables())
 
     def _build_placeholders(self):
@@ -149,12 +149,12 @@ class DQNAgent(BaseNetwork):  # abstract class
 
     def get_weights(self):
         with self.graph.as_default():
-            tensor_weights = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            tensor_weights = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES)
             return self.sess.run(tensor_weights)
 
     def copy_weights(self, weights):
         with self.graph.as_default():
-            tensor_weights = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            tensor_weights = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES)
             for i, weight in enumerate(weights):
                 self.sess.run(tf.assign(tensor_weights[i], weight))
 
@@ -346,7 +346,7 @@ class DQNPong(DQNAgent):
         return mse
 
     def _build_train_op(self):
-            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss,
+            return tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss,
                                                                      global_step=self.global_step)
 
     def lower_epsilon(self):
@@ -369,7 +369,7 @@ class PongTargetNet(DQNPong):
         with self.graph.as_default():
             self._build_placeholders()
             self.logits = self._build_logits()
-            self.saver = tf.train.Saver(var_list=tf.global_variables())
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables())
             self.init_variables(tf.global_variables())
 
     def sync(self, agent_path):
@@ -878,7 +878,6 @@ class CartPoleSAC(BaseNetwork):
     離散版 Soft Actor‑Critic
     Inherits BaseNetwork via DQNPong
     """
-    print(1)
     def __init__(self, input_size, output_size, model_path,
                  scope='CartPoleSAC', gamma=0.99, tau=0.005,
                  alpha_init=0.2, target_entropy=-1.0):
@@ -889,20 +888,20 @@ class CartPoleSAC(BaseNetwork):
         self.tau = tau
         self.target_entropy = target_entropy
 
-        config = tf.ConfigProto(
+        config = tf.compat.v1.ConfigProto(
             allow_soft_placement=True,
-            gpu_options=tf.GPUOptions(allow_growth=True)
+            gpu_options=tf.compat.v1.GPUOptions(allow_growth=True)
         )
         self._sess = tf.Session(config=config, graph=self.graph)
 
         with self.graph.as_default():
             # placeholders
-            self.state = tf.placeholder(tf.float32, shape=self.input_size, name='state')
-            self.action = tf.placeholder(tf.int32, shape=[None, 1], name='action')
-            self.reward = tf.placeholder(tf.float32, shape=[None, 1], name='reward')
-            self.next_state = tf.placeholder(tf.float32, shape=self.input_size, name='next_state')
-            self.done = tf.placeholder(tf.float32, shape=[None, 1], name='done')
-            self.lr = tf.placeholder(tf.float32, shape=(), name='lr')
+            self.state = tf.compat.v1.placeholder(tf.float32, shape=self.input_size, name='state')
+            self.action = tf.compat.v1.placeholder(tf.int32, shape=[None, 1], name='action')
+            self.reward = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='reward')
+            self.next_state = tf.compat.v1.placeholder(tf.float32, shape=self.input_size, name='next_state')
+            self.done = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='done')
+            self.lr = tf.compat.v1.placeholder(tf.float32, shape=(), name='lr')
             # online networks
             with tf.variable_scope(scope):
                 self.logits = self._build_actor(self.state, name='actor')
@@ -916,7 +915,7 @@ class CartPoleSAC(BaseNetwork):
 
             # alpha
             init_val = np.log(alpha_init).astype(np.float32)
-            log_alpha = tf.get_variable(
+            log_alpha = tf.compat.v1.get_variable(
                 name='log_alpha',                           # 零維變數
                 dtype=tf.float32,                   # 明確指定 dtype
                 initializer=tf.constant(init_val, dtype=tf.float32),
@@ -926,8 +925,8 @@ class CartPoleSAC(BaseNetwork):
 
             # actor sample & log_pi
             logp = tf.nn.log_softmax(self.logits)
-            pi_a = tf.multinomial(logp, num_samples=1)
-            idx = tf.concat([tf.expand_dims(tf.range(tf.shape(pi_a)[0]), 1), pi_a], axis=1)
+            pi_a = tf.cast(tf.random.categorical(logp, num_samples=1), tf.int32)
+            idx = tf.concat([tf.expand_dims(tf.range(tf.shape(pi_a)[0], dtype=pi_a.dtype), 1),pi_a], axis=1)
             log_pi = tf.expand_dims(tf.gather_nd(logp, idx), 1)
 
             # actor loss
@@ -937,10 +936,11 @@ class CartPoleSAC(BaseNetwork):
             self.pi_loss = tf.reduce_mean(self.alpha * log_pi - min_q_pi)
 
             # critic target Q
-            next_logits = self._build_actor(self.next_state, name='actor', reuse=True)
+            with tf.variable_scope(scope, reuse=True):
+                next_logits = self._build_actor(self.next_state, name='actor')
             next_logp = tf.nn.log_softmax(next_logits)
-            next_a = tf.multinomial(next_logp, num_samples=1)
-            idx2 = tf.concat([tf.expand_dims(tf.range(tf.shape(next_a)[0]), 1), next_a], axis=1)
+            next_a = tf.cast(tf.random.categorical(next_logp, num_samples=1),tf.int32)
+            idx2 = tf.concat([tf.expand_dims(tf.range(tf.shape(next_a)[0], dtype=next_a.dtype), 1), next_a], axis=1)
             next_log_pi = tf.expand_dims(tf.gather_nd(next_logp, idx2), 1)
             next_q = tf.minimum(self.q1_targ, self.q2_targ)
             next_v = tf.reduce_sum(
@@ -951,30 +951,30 @@ class CartPoleSAC(BaseNetwork):
             act_onehot = tf.one_hot(self.action[:,0], self.output_size[-1])
             q1_sa = tf.reduce_sum(self.q1 * act_onehot, axis=1, keepdims=True)
             q2_sa = tf.reduce_sum(self.q2 * act_onehot, axis=1, keepdims=True)
-            self.q1_loss = tf.losses.mean_squared_error(labels=target_q, predictions=q1_sa)
-            self.q2_loss = tf.losses.mean_squared_error(labels=target_q, predictions=q2_sa)
+            self.q1_loss = tf.compat.v1.losses.mean_squared_error(labels=target_q, predictions=q1_sa)
+            self.q2_loss = tf.compat.v1.losses.mean_squared_error(labels=target_q, predictions=q2_sa)
 
             # alpha loss
             self.alpha_loss = -tf.reduce_mean(log_alpha * (log_pi + self.target_entropy))
 
             # optimizers
-            pi_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/actor')
-            q1_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/q1')
-            q2_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope + '/q2')
-            self.pi_train = tf.train.AdamOptimizer(self.lr).minimize(self.pi_loss, var_list=pi_vars)
-            self.q1_train = tf.train.AdamOptimizer(self.lr).minimize(self.q1_loss, var_list=q1_vars)
-            self.q2_train = tf.train.AdamOptimizer(self.lr).minimize(self.q2_loss, var_list=q2_vars)
-            self.alpha_opt = tf.train.AdamOptimizer(self.lr).minimize(self.alpha_loss, var_list=[log_alpha])
+            pi_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/actor')
+            q1_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/q1')
+            q2_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/q2')
+            self.pi_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.pi_loss, var_list=pi_vars)
+            self.q1_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.q1_loss, var_list=q1_vars)
+            self.q2_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.q2_loss, var_list=q2_vars)
+            self.alpha_opt = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.alpha_loss, var_list=[log_alpha])
 
             # soft updates
-            targ_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope + '_target')
-            main_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope + '/q')
+            targ_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope + '_target')
+            main_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope + '/q')
             self.target_init = [v_t.assign(v) for v_t, v in zip(targ_vars, main_vars)]
             self.target_soft = [v_t.assign(self.tau * v + (1. - self.tau) * v_t)
                                 for v_t, v in zip(targ_vars, main_vars)]
             
             # saver & init
-            self.saver = tf.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
             self.init_variables(tf.global_variables())
 
     def _build_actor(self, x, name, reuse=False):
@@ -1144,7 +1144,7 @@ class CartPoleDQNTarget(CartPoleDQN):
         with self.graph.as_default():
             self._build_placeholders()
             self.logits = self._build_logits()
-            self.saver = tf.train.Saver(var_list=tf.global_variables())
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables())
             self.init_variables(tf.global_variables())
 
     def sync(self, agent_path):
@@ -1366,7 +1366,7 @@ class Actor(DQNAgent):
         return tf.keras.losses.categorical_crossentropy(y_pred=self.logits, y_true=advantage)
 
     def _build_train_op(self):
-        return tf.train.AdamOptimizer(learning_rate=self.learning_rate, name='optimizer').minimize(self.loss)
+        return tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate, name='optimizer').minimize(self.loss)
 
     def select_action(self, qValues, explore=True):
         return np.random.choice(np.arange(self.output_size[-1]), p=qValues.ravel())
@@ -1581,7 +1581,7 @@ class CriticLunarLander(DQNAgent):
         return tf.keras.losses.mean_squared_error(y_true=self.target, y_pred=self.logits)
 
     def _build_train_op(self):
-        return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        return tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
     def learn(self, target_batch, learning_rate, input):
         _ = self.sess.run(self.train_op, feed_dict={self.input: input,
@@ -1601,7 +1601,7 @@ class CriticLunarLanderTarget(CriticLunarLander):
         with self.graph.as_default():
             self._build_placeholders()
             self.logits = self._build_logits()
-            self.saver = tf.train.Saver(var_list=tf.global_variables())
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables())
             self.init_variables(tf.global_variables())
 
     def sync(self, agent_path):
