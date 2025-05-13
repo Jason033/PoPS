@@ -6,20 +6,19 @@ from model import CartPoleSAC
 print("hello")                # ← 改用 SAC
 from configs import CartpoleConfig as cfg     # 同一份設定檔，可在其中新增 lr、tau 等 SAC 參數
 
-import tensorflow as tf
-sess = tf.Session()           # 看會不會另外 segfault
-a   = tf.constant([1.0,2.0])
-b   = sess.run(a)
-print(b)
+print(">>> USING UPDATED sample_batch!!!")
 # ------------------------------------------------------------
 def sample_batch(exp_replay, batch_size):
     """從 ExperienceReplay 抽樣並整理成 SAC 需要的字典格式"""
     batch = exp_replay.sample(batch_size)
-    states      = np.array([item[0] for item in batch])
+    # 同理，states 也用 stack 保持 (batch_size, state_dim)
+    states      = np.stack([item[0] for item in batch], axis=0).astype(np.float32)
+    # actions 本來就是 scalar，維持 (batch_size,1)
     actions     = np.array([[item[1]] for item in batch], dtype=np.int32)
     rewards     = np.array([[item[2]] for item in batch], dtype=np.float32)
-    next_states = np.array([item[3] for item in batch])
-    dones       = np.array([[float(item[4])] for item in batch], dtype=np.float32)
+    # 改用 stack，確保 shape = (batch_size, state_dim)
+    next_states = np.stack([item[4] for item in batch], axis=0).astype(np.float32)
+    dones       = np.array([np.squeeze(item[3]).astype(np.float32) for item in batch], dtype=np.float32).reshape(-1, 1)
     return {'s': states,
             'a': actions,
             'r': rewards,
