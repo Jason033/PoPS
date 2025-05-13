@@ -75,7 +75,13 @@ class ExperienceReplay:
     def getMiniBatch(self, batch_size):
         indices = random.sample(population=range(len(self.buffer)), k=min(batch_size, len(self.buffer)))
         return [self.buffer[index] for index in indices]
-
+    def sample(self, batch_size):
+            """隨機抽 batch_size 筆記憶回傳"""
+            # 如果 buffer 裡的筆數少於 batch_size，就回傳全部
+            batch_size = min(batch_size, len(self.buffer))
+            # 隨機選 index
+            indices = random.sample(range(len(self.buffer)), batch_size)
+            return [self.buffer[i] for i in indices]
 
 class Supervised_ExperienceReplay(ExperienceReplay):
 
