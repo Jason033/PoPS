@@ -1,2 +1,3 @@
 source /srv/conda/etc/profile.d/conda.sh
 conda activate kernel
+python -m Cartpole.train_cartpole
