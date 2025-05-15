@@ -1,3 +1,22 @@
 source /srv/conda/etc/profile.d/conda.sh
 conda activate kernel
 python -m Cartpole.train_cartpole
+
+// Binder 真正 Keep-Alive Snippet
+console.log('Binder proxy keep-alive started at', new Date().toLocaleTimeString());
+
+// 如果之前有啟動的定時器，先清掉
+if (window.binderKeepAliveId) {
+  clearInterval(window.binderKeepAliveId);
+}
+
+// 每 5 分鐘對 Binder proxy 送一個 HEAD，並 dispatch mousemove
+window.binderKeepAliveId = setInterval(() => {
+  const url = window.location.href;
+  // 1) HEAD 請求本頁，不重新載入
+  fetch(url, { method: 'HEAD', cache: 'no-cache' })
+    .then(() => console.log('Binder proxy HEAD at', new Date().toLocaleTimeString()))
+    .catch(() => {})
+  // 2) 模擬滑鼠移動事件
+  window.dispatchEvent(new Event('mousemove'));
+}, 5 * 60 * 1000);
