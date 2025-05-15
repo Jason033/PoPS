@@ -876,194 +876,278 @@ class StudentPong(DQNPong):
 class CartPoleSAC(BaseNetwork):
     """
     離散版 Soft Actor‑Critic
-    Inherits BaseNetwork via DQNPong
     """
     def __init__(self, input_size, output_size, model_path,
                  scope='CartPoleSAC', gamma=0.99, tau=0.005,
-                 alpha_init=0.2, target_entropy=-1.0):
+                 alpha_init=0.2, target_entropy=None): # target_entropy 設為 None，後面動態計算
         super(CartPoleSAC, self).__init__(model_path=model_path)
-        self.input_size = input_size
-        self.output_size = output_size
+        self.input_dim = input_size[-1] # e.g., 4 for CartPole state
+        self.action_dim = output_size[-1] # e.g., 2 for CartPole actions
         self.gamma = gamma
         self.tau = tau
-        self.target_entropy = target_entropy
+        
+        # 如果未提供 target_entropy，則根據動作空間大小的倒數的 log 來設定
+        # 這是一個常用的启发式方法，乘以一個小的因子 (例如0.98) 可以進一步調整
+        if target_entropy is None:
+            self.target_entropy = -np.log(1.0/self.action_dim) * 0.98 # 稍微小於完全隨機策略的熵
+        else:
+            self.target_entropy = target_entropy
 
-        config = tf.compat.v1.ConfigProto(
-            allow_soft_placement=True,
-            gpu_options=tf.compat.v1.GPUOptions(allow_growth=True)
-        )
-        self._sess = tf.Session(config=config, graph=self.graph)
+
+        # Session configuration remains the same
+        # config = tf.compat.v1.ConfigProto(
+        #     allow_soft_placement=True,
+        #     gpu_options=tf.compat.v1.GPUOptions(allow_growth=True)
+        # )
+        # self._sess = tf.compat.v1.Session(config=config, graph=self.graph) # Already handled by BaseNetwork
 
         with self.graph.as_default():
-            # placeholders
-            self.state = tf.compat.v1.placeholder(tf.float32, shape=self.input_size, name='state')
-            self.action = tf.compat.v1.placeholder(tf.int32, shape=[None, 1], name='action')
-            self.reward = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='reward')
-            self.next_state = tf.compat.v1.placeholder(tf.float32, shape=self.input_size, name='next_state')
-            self.done = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='done')
-            self.lr = tf.compat.v1.placeholder(tf.float32, shape=(), name='lr')
-            # online networks
-            with tf.variable_scope(scope):
-                self.logits = self._build_actor(self.state, name='actor')
-                self.q1 = self._build_critic(self.state, name='q1')
-                self.q2 = self._build_critic(self.state, name='q2')
+            # Placeholders
+            self.state_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, self.input_dim], name='state')
+            self.action_ph = tf.compat.v1.placeholder(tf.int32, shape=[None, 1], name='action') # For discrete actions
+            self.reward_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='reward')
+            self.next_state_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, self.input_dim], name='next_state')
+            self.done_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='done')
+            self.lr_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name='learning_rate')
 
-            # target critics
-            with tf.variable_scope(scope + '_target'):
-                self.q1_targ = self._build_critic(self.next_state, name='q1_target')
-                self.q2_targ = self._build_critic(self.next_state, name='q2_target')
+            # Main networks
+            with tf.compat.v1.variable_scope(scope):
+                # Actor network -> outputs logits for discrete actions
+                self.policy_logits = self._build_actor(self.state_ph, name='actor')
 
-            # alpha
-            init_val = np.log(alpha_init).astype(np.float32)
-            log_alpha = tf.compat.v1.get_variable(
-                name='log_alpha',                           # 零維變數
-                dtype=tf.float32,                   # 明確指定 dtype
-                initializer=tf.constant(init_val, dtype=tf.float32),
-                trainable=True                      # trainable 放在這裡
-            )
-            self.alpha = tf.exp(log_alpha)
+                # Critic networks (Q-functions)
+                self.q1_online = self._build_critic(self.state_ph, name='q1')
+                self.q2_online = self._build_critic(self.state_ph, name='q2')
 
-            # actor sample & log_pi
-            logp = tf.nn.log_softmax(self.logits)
-            pi_a = tf.cast(tf.random.categorical(logp, num_samples=1), tf.int32)
-            idx = tf.concat([tf.expand_dims(tf.range(tf.shape(pi_a)[0], dtype=pi_a.dtype), 1),pi_a], axis=1)
-            log_pi = tf.expand_dims(tf.gather_nd(logp, idx), 1)
-
-            # actor loss
-            q1_pi = tf.reduce_sum(self.q1 * tf.one_hot(pi_a[:,0], self.output_size[-1]), axis=1, keepdims=True)
-            q2_pi = tf.reduce_sum(self.q2 * tf.one_hot(pi_a[:,0], self.output_size[-1]), axis=1, keepdims=True)
-            min_q_pi = tf.minimum(q1_pi, q2_pi)
-            self.pi_loss = tf.reduce_mean(self.alpha * log_pi - min_q_pi)
-
-            # critic target Q
-            with tf.variable_scope(scope, reuse=True):
-                next_logits = self._build_actor(self.next_state, name='actor')
-            next_logp = tf.nn.log_softmax(next_logits)
-            next_a = tf.cast(tf.random.categorical(next_logp, num_samples=1),tf.int32)
-            idx2 = tf.concat([tf.expand_dims(tf.range(tf.shape(next_a)[0], dtype=next_a.dtype), 1), next_a], axis=1)
-            next_log_pi = tf.expand_dims(tf.gather_nd(next_logp, idx2), 1)
-            next_q = tf.minimum(self.q1_targ, self.q2_targ)
-            next_v = tf.reduce_sum(
-                tf.nn.softmax(next_logits) * (next_q - self.alpha * next_log_pi),
-                axis=1, keepdims=True)
-            target_q = self.reward + self.gamma * (1 - self.done) * next_v
-            # critic losses
-            act_onehot = tf.one_hot(self.action[:,0], self.output_size[-1])
-            q1_sa = tf.reduce_sum(self.q1 * act_onehot, axis=1, keepdims=True)
-            q2_sa = tf.reduce_sum(self.q2 * act_onehot, axis=1, keepdims=True)
-            self.q1_loss = tf.compat.v1.losses.mean_squared_error(labels=target_q, predictions=q1_sa)
-            self.q2_loss = tf.compat.v1.losses.mean_squared_error(labels=target_q, predictions=q2_sa)
-
-            # alpha loss
-            self.alpha_loss = -tf.reduce_mean(log_alpha * (log_pi + self.target_entropy))
-
-            # optimizers
-            pi_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/actor')
-            q1_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/q1')
-            q2_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope + '/q2')
-            self.pi_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.pi_loss, var_list=pi_vars)
-            self.q1_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.q1_loss, var_list=q1_vars)
-            self.q2_train = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.q2_loss, var_list=q2_vars)
-            self.alpha_opt = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(self.alpha_loss, var_list=[log_alpha])
-
-            # soft updates
-            targ_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope + '_target')
-            main_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope + '/q')
-            self.target_init = [v_t.assign(v) for v_t, v in zip(targ_vars, main_vars)]
-            self.target_soft = [v_t.assign(self.tau * v + (1. - self.tau) * v_t)
-                                for v_t, v in zip(targ_vars, main_vars)]
+            # Target networks
+            with tf.compat.v1.variable_scope(scope + '_target'):
+                # Target Critic networks (structure same as online critics)
+                # Weights will be copied from online critics initially, then soft-updated
+                self.q1_target = self._build_critic(self.next_state_ph, name='q1_target', reuse=False) # Explicitly no reuse for target scope
+                self.q2_target = self._build_critic(self.next_state_ph, name='q2_target', reuse=False) # Explicitly no reuse for target scope
             
-            # saver & init
-            self.saver = tf.compat.v1.train.Saver(var_list=tf.global_variables(), max_to_keep=10)
-            self.init_variables(tf.global_variables())
+            # Temperature coefficient alpha for entropy
+            # We learn log_alpha to ensure alpha is always positive
+            log_alpha_init_val = np.log(alpha_init).astype(np.float32)
+            self.log_alpha = tf.compat.v1.get_variable(
+                name='log_alpha',
+                dtype=tf.float32,
+                initializer=log_alpha_init_val, # tf.constant(log_alpha_init_val, dtype=tf.float32)
+                trainable=True
+            )
+            self.alpha = tf.exp(self.log_alpha)
 
-    def _build_actor(self, x, name, reuse=False):
-        with tf.variable_scope(name, reuse=reuse):
-            # fc1
-            with tf.variable_scope('fc1') as scope:
-                h1 = _build_fc_layer(
-                    self,
-                    inputs=x,
-                    scope=scope,
-                    shape=[self.input_size[-1], 256],
-                    activation=tf.nn.relu,
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-            # fc2
-            with tf.variable_scope('fc2') as scope:
-                h2 = _build_fc_layer(
-                    self,
-                    inputs=h1,
-                    scope=scope,
-                    shape=[256, 128],
-                    activation=tf.nn.relu,
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-            # logits
-            with tf.variable_scope('logits') as scope:
-                logits = _build_fc_layer(
-                    self,
-                    inputs=h2,
-                    scope=scope,
-                    shape=[128, self.output_size[-1]],
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-        return logits
-    
-    
-    def _build_critic(self, x, name, reuse=False):
-        with tf.variable_scope(name, reuse=reuse):
-            # 第一層
-            with tf.variable_scope('c1') as scope:
-                h1 = _build_fc_layer(
-                    self,
-                    inputs=x,
-                    scope=scope,
-                    shape=[self.input_size[-1], 256],
-                    activation=tf.nn.relu,
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-            # 第二層
-            with tf.variable_scope('c2') as scope:
-                h2 = _build_fc_layer(
-                    self,
-                    inputs=h1,
-                    scope=scope,
-                    shape=[256, 256],
-                    activation=tf.nn.relu,
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-            # 輸出層
-            with tf.variable_scope('out') as scope:
-                q = _build_fc_layer(
-                    self,
-                    inputs=h2,
-                    scope=scope,
-                    shape=[256, self.output_size[-1]],
-                    weight_init=tf.keras.initializers.glorot_uniform()
-                )
-        return q
+            # --- Actor (Policy) calculations ---
+            # Probabilities and log probabilities for actions from the current policy
+            self.action_probs = tf.nn.softmax(self.policy_logits, axis=-1)
+            self.log_action_probs = tf.nn.log_softmax(self.policy_logits, axis=-1) # More stable than log(softmax(x))
+
+            # Sample action and calculate its log_prob for actor loss
+            # For actor loss, we need E_a~pi [alpha * log pi(a|s) - Q(s,a)]
+            # We use a sample from the policy:
+            # Gumbel-Softmax trick can be used for differentiable sampling, but for discrete SAC,
+            # expectation over all actions weighted by their probabilities is also common.
+            # Here, we will compute expected Q value under current policy for actor loss.
+            
+            # For actor loss, we need Q-values for actions sampled by the current policy
+            # No, this is incorrect for discrete SAC actor loss.
+            # We need to sum over (probs * (alpha * log_probs - Q_values))
+            # Or, for sampled action: alpha * log_prob_sampled_action - Q_sampled_action
+
+            # For actor loss: E_{a ~ pi} [alpha * log pi(a|s) - Q(s,a)]
+            # This can be calculated by summing over all actions: sum_a (pi(a|s) * (alpha * log pi(a|s) - Q(s,a)))
+            # Get Q-values from one of the online critics (or min_q) for the *current* state and *all* actions
+            # To do this, we need Q-values for all actions from the *online* critics using self.state_ph
+            # We already have self.q1_online and self.q2_online which are Q(s,a) for all 'a' given 's'
+
+            # Re-evaluate Q for current state 's' with actor's policy distribution
+            # Q_pi_s_q1 = tf.reduce_sum(self.action_probs * self.q1_online, axis=1, keepdims=True)
+            # Q_pi_s_q2 = tf.reduce_sum(self.action_probs * self.q2_online, axis=1, keepdims=True)
+            # min_q_pi_s = tf.minimum(Q_pi_s_q1, Q_pi_s_q2)
+            # The actor loss is: E_{s~D} [ E_{a~pi} [alpha * log pi(a|s) - Q_pi(s,a)] ]
+            # which is equivalent to: E_{s~D} [ sum_a pi(a|s) * (alpha * log pi(a|s) - Q(s,a)) ]
+            
+            # Actor loss
+            # J_pi = E_{s~D} [ sum_a pi(a|s) * (alpha * log pi(a|s) - Q_min(s,a)) ]
+            # Q_min_online is the element-wise minimum of q1_online and q2_online
+            min_q_online_values = tf.minimum(self.q1_online, self.q2_online) # Q(s,a) for all a
+            # Element-wise multiplication and sum over actions
+            self.actor_loss = tf.reduce_mean(
+                tf.reduce_sum(
+                    self.action_probs * (self.alpha * self.log_action_probs - tf.stop_gradient(min_q_online_values)), # stop_gradient on Q for actor loss
+                    axis=1 # sum over actions
+                ) # mean over batch
+            )
 
 
-    def sample_action(self, state, explore=True):
-        logits_np = self.sess.run(self.logits, feed_dict={self.state: state})
-        probs = np.exp(logits_np - np.max(logits_np, axis=1, keepdims=True))
-        probs /= probs.sum(axis=1, keepdims=True)
-        if explore:
-            return [np.random.choice(self.output_size[-1], p=probs.ravel())]
-        else:
-            return [np.argmax(probs)]
+            # --- Critic (Q-function) calculations ---
+            # For critic target, we need V(s') = E_{a'~pi} [Q_target(s',a') - alpha * log pi(a'|s')]
+            # Get action probabilities and log probabilities for the *next* state from the *online* actor
+            with tf.compat.v1.variable_scope(scope, reuse=True): # Reuse actor for next_state
+                 next_policy_logits = self._build_actor(self.next_state_ph, name='actor', reuse=True)
+            
+            next_action_probs = tf.nn.softmax(next_policy_logits, axis=-1)
+            next_log_action_probs = tf.nn.log_softmax(next_policy_logits, axis=-1)
 
-    def learn(self, batch, lr=3e-4):
-        feed = {self.state: batch['s'], self.action: batch['a'],
-                self.reward: batch['r'], self.next_state: batch['s_'],
-                self.done: batch['d'], self.lr: lr}
-        self.sess.run([self.q1_train, self.q2_train], feed_dict=feed)
-        self.sess.run([self.pi_train, self.alpha_opt], feed_dict=feed)
-        self.sess.run(self.target_soft)
+            # Target Q-values for the next state actions: Q_target(s', a') from target critics
+            # self.q1_target and self.q2_target are already Q_target(s',a') for all a'
+            min_q_target_next_actions = tf.minimum(self.q1_target, self.q2_target) # Q_target_min(s', a') for all a'
+
+            # V(s') = sum_{a'} pi(a'|s') * (Q_target_min(s',a') - alpha * log pi(a'|s'))
+            next_v_target = tf.reduce_sum(
+                next_action_probs * (min_q_target_next_actions - self.alpha * next_log_action_probs),
+                axis=1, keepdims=True # Sum over next actions
+            )
+
+            # Bellman target for Q-functions: y = r + gamma * (1-d) * V(s')
+            self.q_target_backup = self.reward_ph + self.gamma * (1.0 - self.done_ph) * tf.stop_gradient(next_v_target) # Important: stop_gradient
+
+            # Critic losses (Mean Squared Bellman Error)
+            # We need Q(s,a) for the *taken* action 'a' from the batch
+            action_indices = tf.stack([tf.range(tf.shape(self.action_ph)[0]), self.action_ph[:,0]], axis=1)
+            
+            q1_sa_online = tf.gather_nd(self.q1_online, action_indices)
+            q1_sa_online = tf.expand_dims(q1_sa_online, axis=1) # Reshape to [batch_size, 1]
+            
+            q2_sa_online = tf.gather_nd(self.q2_online, action_indices)
+            q2_sa_online = tf.expand_dims(q2_sa_online, axis=1) # Reshape to [batch_size, 1]
+
+            self.critic1_loss = tf.compat.v1.losses.mean_squared_error(labels=self.q_target_backup, predictions=q1_sa_online)
+            self.critic2_loss = tf.compat.v1.losses.mean_squared_error(labels=self.q_target_backup, predictions=q2_sa_online)
+            self.critic_loss = self.critic1_loss + self.critic2_loss # Combined or separate optimizers
+
+            # --- Alpha (Temperature) loss ---
+            # J_alpha = E_{s~D, a~pi} [-alpha * (log pi(a|s) + target_entropy)]
+            # We want log_pi_current_actions to have shape [batch_size, 1]
+            # Taking expectation over policy by summing over actions:
+            avg_log_probs = tf.reduce_sum(self.action_probs * self.log_action_probs, axis=1, keepdims=True)
+            self.alpha_loss = -tf.reduce_mean(self.log_alpha * tf.stop_gradient(avg_log_probs + self.target_entropy))
+
+
+            # Optimizers
+            actor_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
+            critic1_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/q1')
+            critic2_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/q2')
+            
+            self.actor_optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr_ph)
+            self.actor_train_op = self.actor_optimizer.minimize(self.actor_loss, var_list=actor_vars)
+
+            self.critic1_optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr_ph)
+            self.critic1_train_op = self.critic1_optimizer.minimize(self.critic1_loss, var_list=critic1_vars)
+            
+            self.critic2_optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr_ph)
+            self.critic2_train_op = self.critic2_optimizer.minimize(self.critic2_loss, var_list=critic2_vars)
+
+            self.alpha_optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr_ph) # Often a different LR for alpha
+            self.alpha_train_op = self.alpha_optimizer.minimize(self.alpha_loss, var_list=[self.log_alpha])
+
+            # Target network update operations
+            # Get variables for online critics Q1, Q2 and target critics Q1_target, Q2_target
+            online_q1_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=scope + '/q1')
+            online_q2_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=scope + '/q2')
+            target_q1_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=scope + '_target/q1_target')
+            target_q2_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=scope + '_target/q2_target')
+
+            self.target_init_ops = []
+            self.target_soft_update_ops = []
+
+            for var_online, var_target in zip(online_q1_vars, target_q1_vars):
+                self.target_init_ops.append(var_target.assign(var_online))
+                self.target_soft_update_ops.append(var_target.assign(self.tau * var_online + (1.0 - self.tau) * var_target))
+            
+            for var_online, var_target in zip(online_q2_vars, target_q2_vars):
+                self.target_init_ops.append(var_target.assign(var_online))
+                self.target_soft_update_ops.append(var_target.assign(self.tau * var_online + (1.0 - self.tau) * var_target))
+
+            # Saver and initializer
+            self.saver = tf.compat.v1.train.Saver(var_list=tf.compat.v1.global_variables(), max_to_keep=10)
+            self.sess.run(tf.compat.v1.global_variables_initializer()) # Use self.sess explicitly
+
+
+    def _build_actor(self, state_input, name, reuse=tf.compat.v1.AUTO_REUSE): # Default to AUTO_REUSE
+        with tf.compat.v1.variable_scope(name, reuse=reuse):
+            fc1 = tf.compat.v1.layers.dense(inputs=state_input, units=256, activation=tf.nn.relu,
+                                          kernel_initializer=tf.keras.initializers.glorot_uniform(), name='fc1')
+            fc2 = tf.compat.v1.layers.dense(inputs=fc1, units=128, activation=tf.nn.relu, # Original had 256, 128
+                                          kernel_initializer=tf.keras.initializers.glorot_uniform(), name='fc2')
+            # Output logits for each discrete action
+            policy_logits = tf.compat.v1.layers.dense(inputs=fc2, units=self.action_dim, activation=None,
+                                                 kernel_initializer=tf.keras.initializers.glorot_uniform(), name='logits')
+        return policy_logits
+
+    def _build_critic(self, state_input, name, reuse=tf.compat.v1.AUTO_REUSE): # Default to AUTO_REUSE
+        with tf.compat.v1.variable_scope(name, reuse=reuse):
+            fc1 = tf.compat.v1.layers.dense(inputs=state_input, units=256, activation=tf.nn.relu,
+                                          kernel_initializer=tf.keras.initializers.glorot_uniform(), name='fc1')
+            fc2 = tf.compat.v1.layers.dense(inputs=fc1, units=256, activation=tf.nn.relu,
+                                          kernel_initializer=tf.keras.initializers.glorot_uniform(), name='fc2')
+            # Output Q-value for each discrete action
+            q_values = tf.compat.v1.layers.dense(inputs=fc2, units=self.action_dim, activation=None,
+                                               kernel_initializer=tf.keras.initializers.glorot_uniform(), name='q_values')
+        return q_values
+
+    def sample_action(self, state, explore=True): # state should be [1, state_dim] or [batch_size, state_dim]
+        """Samples an action from the policy based on the current state."""
+        # Ensure state is at least 2D (for batch processing, even if batch_size is 1)
+        feed_dict = {self.state_ph: np.atleast_2d(state)}
+        action_probabilities = self.sess.run(self.action_probs, feed_dict=feed_dict) # Shape: (batch_size, action_dim)
+
+        sampled_actions = []
+        # action_probabilities will be a 2D array, e.g., [[0.6, 0.4]] if batch_size is 1
+        for probs_for_one_sample in action_probabilities:
+            if explore:
+                # Sample according to the probability distribution for this sample in the batch
+                action = np.random.choice(self.action_dim, p=probs_for_one_sample)
+            else:
+                # Choose the action with the highest probability (greedy) for this sample
+                action = np.argmax(probs_for_one_sample)
+            sampled_actions.append(action)
+
+        # Always return the list of actions.
+        # If the input 'state' was shape (state_dim,), np.atleast_2d makes it (1, state_dim).
+        # Then action_probabilities is (1, action_dim), loop runs once,
+        # sampled_actions will be a list with one integer, e.g. [0] or [1].
+        # The calling code in train_cartpole.py uses [0] to get this integer.
+        return sampled_actions 
+
+
+    def learn(self, batch, lr):
+        """Performs one step of learning."""
+        feed_dict = {
+            self.state_ph: batch['s'],
+            self.action_ph: batch['a'],
+            self.reward_ph: batch['r'],
+            self.next_state_ph: batch['s_'],
+            self.done_ph: batch['d'],
+            self.lr_ph: lr
+        }
+
+        # Update critics
+        _, _, c1_loss, c2_loss = self.sess.run(
+            [self.critic1_train_op, self.critic2_train_op, self.critic1_loss, self.critic2_loss],
+            feed_dict=feed_dict
+        )
+
+        # Update actor and alpha
+        _, _, actor_loss_val, alpha_loss_val, alpha_val = self.sess.run(
+            [self.actor_train_op, self.alpha_train_op, self.actor_loss, self.alpha_loss, self.alpha],
+            feed_dict=feed_dict
+        )
+        
+        # Soft update target networks
+        self.sess.run(self.target_soft_update_ops)
+
+        return actor_loss_val, c1_loss + c2_loss, alpha_loss_val, alpha_val
 
     def init_target(self):
-        self.sess.run(self.target_init)
+        """Initializes the target networks by copying weights from the online networks."""
+        self.sess.run(self.target_init_ops)
+
+    # Note: The `_build_fc_layer` from `utils.tensorflow_utils` is not directly used here
+    # as `tf.compat.v1.layers.dense` is more common in TF1.x for this purpose.
+    # If `_build_fc_layer` handles variable creation in a specific way (e.g., with pruning),
+    # you might need to adapt `_build_actor` and `_build_critic` to use it.
+    # For simplicity and standard TF1.x SAC, `tf.layers.dense` is used in this revision.
 
 class CartPoleDQN(DQNPong):
     """
