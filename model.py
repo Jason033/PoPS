@@ -889,7 +889,7 @@ class CartPoleSAC(BaseNetwork):
         # 如果未提供 target_entropy，則根據動作空間大小的倒數的 log 來設定
         # 這是一個常用的启发式方法，乘以一個小的因子 (例如0.98) 可以進一步調整
         if target_entropy is None:
-            self.target_entropy = -np.log(1.0/self.action_dim) * 0.98 # 稍微小於完全隨機策略的熵
+            self.target_entropy = -np.log(1.0/self.action_dim) * 0.5 # 稍微小於完全隨機策略的熵
         else:
             self.target_entropy = target_entropy
 
