@@ -54,7 +54,8 @@ class BaseNetwork:
         if ckpt is None:
             raise FileNotFoundError('Can`t load a model. Checkpoint does not exist.')
         restore_path = ckpt.model_checkpoint_path
-        self.saver.restore(sess or self.sess, restore_path)
+        self.saver.restore(self.sess, restore_path or self.model_path)
+        #self.saver.restore(sess or self.sess, restore_path)
 
         return self
 
@@ -885,7 +886,7 @@ class CartPoleSAC(BaseNetwork):
         self.action_dim = output_size[-1] # e.g., 2 for CartPole actions
         self.gamma = gamma
         self.tau = tau
-        
+        self.scope = scope
         # 如果未提供 target_entropy，則根據動作空間大小的倒數的 log 來設定
         # 這是一個常用的启发式方法，乘以一個小的因子 (例如0.98) 可以進一步調整
         if target_entropy is None:
@@ -1058,10 +1059,55 @@ class CartPoleSAC(BaseNetwork):
             for var_online, var_target in zip(online_q2_vars, target_q2_vars):
                 self.target_init_ops.append(var_target.assign(var_online))
                 self.target_soft_update_ops.append(var_target.assign(self.tau * var_online + (1.0 - self.tau) * var_target))
-
-            # Saver and initializer
+# Saver and initializer
             self.saver = tf.compat.v1.train.Saver(var_list=tf.compat.v1.global_variables(), max_to_keep=10)
             self.sess.run(tf.compat.v1.global_variables_initializer()) # Use self.sess explicitly
+            # # ===== 改用「只 restore checkpoint 已有的變數」的方式 =====
+            # # 1. 先讀取 checkpoint 裡面的所有 variable name
+            # # ckpt_path = self.model_path  # 這應該是 CartPoleSAC 存放 ckpt 的路徑，不要帶副檔名
+            # # reader = tf.train.NewCheckpointReader(ckpt_path)
+            # # ckpt_var_to_shape_map = reader.get_variable_to_shape_map()
+            # # ckpt_var_names = set(ckpt_var_to_shape_map.keys())
+            # # 1. 先透過 get_checkpoint_state 取得最新的 checkpoint 路徑
+            # ckpt_state = tf.train.get_checkpoint_state(self.model_path)
+            # if ckpt_state is None:
+            #     raise FileNotFoundError(f"Cannot load model: no checkpoint found in {self.model_path}")
+            # ckpt_prefix = ckpt_state.model_checkpoint_path  # 例如 "save_model/SAC_model/model.ckpt-1000"
+
+            # # 2. 讀取 checkpoint 裡面的所有 variable name
+            # reader = tf.train.NewCheckpointReader(ckpt_prefix)
+            # ckpt_var_to_shape_map = reader.get_variable_to_shape_map()
+            # ckpt_var_names = set(ckpt_var_to_shape_map.keys())
+
+            # # ckpt_state = tf.train.get_checkpoint_state(self.model_path)
+            # # if ckpt_state is None:
+            # #     raise FileNotFoundError(f"Cannot load model: no checkpoint found in {self.model_path}")
+            # # ckpt_prefix = ckpt_state.model_checkpoint_path  # 例如 "save_model/SAC_model/model.ckpt-1000"
+        
+            # # # 2. 讀取 checkpoint 裡面的所有 variable name
+            # # reader = tf.train.NewCheckpointReader(ckpt_prefix)
+            # # ckpt_var_to_shape_map = reader.get_variable_to_shape_map()
+            # # ckpt_var_names = set(ckpt_var_to_shape_map.keys())    
+            # # 3. 從 global_variables() 中挑出那些在 ckpt 裡面真正存在的變數
+            # all_vars = tf.global_variables()
+            # restore_vars = []
+            # for v in all_vars:
+            #     name_in_graph = v.name.split(':')[0]
+            #     if name_in_graph in ckpt_var_names:
+            #         restore_vars.append(v)
+            #     else:
+            #         tf.logging.info(f"Skip restoring variable '{v.name}' (not found in checkpoint).")
+
+            # # 4. 用 restore_vars 建立 Saver，只 restore checkpoint 有的那些變數
+            # self.saver = tf.compat.v1.train.Saver(var_list=restore_vars, max_to_keep=10)
+            # # --- 刪除：一次初始化所有變數（會清掉剛 restore 的值） ---
+            # # self.sess.run(tf.compat.v1.global_variables_initializer())
+            # # +++ 新增：先 restore 已在 checkpoint 的變數，再初始化唯有 mask 還沒被 restore 的變數 +++
+            # self.saver.restore(self.sess, ckpt_prefix)
+            # # 取得所有名稱包含 "_mask" 的變數列表
+            # mask_vars = [v for v in tf.global_variables() if "_mask" in v.name]
+            # # 單獨初始化這些 mask 變數，避免「Attempting to use uninitialized value ..._mask」錯誤
+            # self.sess.run(tf.compat.v1.variables_initializer(mask_vars))
 
 
     def _build_actor(self, state_input, name, reuse=tf.compat.v1.AUTO_REUSE): # Default to AUTO_REUSE
